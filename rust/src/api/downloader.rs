@@ -19,8 +19,6 @@ use tokio::{fs, process::Command, sync::Mutex};
 use url::Url;
 
 #[cfg(target_os = "android")]
-use mediacodec::{Frame, OutputFormat, MediaCodec, MediaExtractor, MediaFormat, MediaMuxer, SampleFormat, VideoFrame};
-#[cfg(target_os = "android")]
 use jni::objects::{GlobalRef, JObject, JValue};
 #[cfg(target_os = "android")]
 use jni::JavaVM;
@@ -64,198 +62,53 @@ impl AndroidMediaCodecTranscoder {
         video_bitrate: u32,
         audio_bitrate: u32,
     ) -> Result<()> {
+        let jvm = self.jvm.clone();
         let input_ts = input_ts.to_string();
         let output_mp4 = output_mp4.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let mut extractor = MediaExtractor::from_url(&input_ts)
-                .context(format!("Failed to create MediaExtractor for: {}", input_ts))?;
+            let mut env = jvm
+                .attach_current_thread()
+                .map_err(|e| anyhow!("JNI attach thread failed: {}", e))?;
 
-            info!("MediaExtractor: Found {} tracks", extractor.track_count());
+            let class = env
+                .find_class("com/bluevale/m3u8_downloader/MediaTranscoder")
+                .map_err(|e| anyhow!("Failed to find Java class: {}", e))?;
 
-            let mut decoders = vec![];
-            let mut track_formats = vec![];
+            let input_ts_jstring = env
+                .new_string(&input_ts)
+                .map_err(|e| anyhow!("JNI new_string failed: {}", e))?;
 
-            for i in 0..extractor.track_count() {
-                let format = extractor
-                    .track_format(i)
-                    .context(format!("Failed to get track format for track {}", i))?;
+            let output_mp4_jstring = env
+                .new_string(&output_mp4)
+                .map_err(|e| anyhow!("JNI new_string failed: {}", e))?;
 
-                info!("Track {}: {}", i, format.to_string());
+            let result = env
+                .call_static_method(
+                    class,
+                    "transcode",
+                    "(Ljava/lang/String;Ljava/lang/String;II)Z",
+                    &[
+                        JValue::Object(&input_ts_jstring),
+                        JValue::Object(&output_mp4_jstring),
+                        JValue::Int(video_bitrate as i32),
+                        JValue::Int(audio_bitrate as i32),
+                    ],
+                )
+                .map_err(|e| anyhow!("JNI call_static_method failed: {}", e))?;
 
-                let mime_type = format
-                    .get_string("mime")
-                    .context("Track mime type not found")?;
+            let success = result
+                .z()
+                .map_err(|e| anyhow!("JNI get boolean return failed: {}", e))?;
 
-                let mut codec = MediaCodec::create_decoder(&mime_type)
-                    .context(format!("Failed to create decoder for mime: {}", mime_type))?;
-
-                codec
-                    .init(&format, None, 0)
-                    .context("Failed to initialize MediaCodec")?;
-
-                codec.start().context("Failed to start MediaCodec")?;
-
-                track_formats.push(format.clone());
-                decoders.push(codec);
-                extractor.select_track(i);
+            if success {
+                Ok(())
+            } else {
+                Err(anyhow!("Java MediaCodec transcode failed"))
             }
-
-            let muxer = MediaMuxer::new(&output_mp4, OutputFormat::Mpeg4)
-                .context("Failed to create MediaMuxer")?;
-
-            let mut muxer = muxer;
-            let mut track_indices = vec![];
-
-            for (i, format) in track_formats.iter().enumerate() {
-                let mime_type = format
-                    .get_string("mime")
-                    .context("Failed to get mime from format")?;
-
-                let mut output_format = MediaFormat::new();
-
-                match mime_type.as_str() {
-                    mime if mime.starts_with("video/") => {
-                        output_format.set_string("mime", mime_type);
-                        output_format.set_integer("width", format.get_integer("width")?);
-                        output_format.set_integer("height", format.get_integer("height")?);
-                        output_format.set_integer("frame-rate", format.get_integer("frame-rate")?);
-                        if video_bitrate > 0 {
-                            output_format.set_integer("bitrate", video_bitrate as i32);
-                        }
-                    }
-                    mime if mime.starts_with("audio/") => {
-                        output_format.set_string("mime", mime_type);
-                        output_format
-                            .set_integer("sample-rate", format.get_integer("sample-rate")?);
-                        output_format
-                            .set_integer("channel-count", format.get_integer("channel-count")?);
-                        if audio_bitrate > 0 {
-                            output_format.set_integer("bitrate", audio_bitrate as i32);
-                        }
-                    }
-                    _ => {
-                        warn!("Unsupported mime type: {}", mime_type);
-                        continue;
-                    }
-                }
-
-                let track_idx = muxer
-                    .add_track(&output_format)
-                    .context("Failed to add track to muxer")?;
-                track_indices.push(track_idx);
-                info!("Added output track {} (index: {})", i, track_idx);
-            }
-
-            muxer.start().context("Failed to start MediaMuxer")?;
-
-            let mut frame_count = 0u64;
-            while extractor.has_next() {
-                let track_idx = extractor.track_index();
-
-                if track_idx < 0 {
-                    break;
-                }
-
-                let codec = &mut decoders[track_idx as usize];
-
-                if let Ok(mut input_buffer) = codec.dequeue_input() {
-                    if !extractor.read_next(&mut input_buffer) {
-                        info!("MediaExtractor.read_next() returned false");
-                        break;
-                    }
-                }
-
-                // Dequeue output buffer
-                if let Ok(output_buffer) = codec.dequeue_output() {
-                    if let Some(ref frame) = output_buffer.frame() {
-                        match frame {
-                            Frame::Video(video_frame) => {
-                                match video_frame {
-                                    VideoFrame::Hardware => {
-                                        // Hardware-rendered frames - muxer will handle
-                                    }
-                                    VideoFrame::RawFrame(raw_frame) => {
-                                        let output_idx =
-                                            track_indices.get(track_idx as usize).ok_or_else(
-                                                || anyhow!("Invalid track index for muxer"),
-                                            )?;
-
-                                        muxer
-                                            .write_sample_data(
-                                                *output_idx,
-                                                &raw_frame,
-                                                &output_buffer,
-                                            )
-                                            .context("Failed to write sample data to muxer")?;
-                                    }
-                                }
-                                frame_count += 1;
-                                if frame_count % 100 == 0 {
-                                    info!("Processed {} video frames", frame_count);
-                                }
-                            }
-                            Frame::Audio(audio_frame) => {
-                                match audio_frame.format() {
-                                    SampleFormat::S16(samples) => {
-                                        let output_idx =
-                                            track_indices.get(track_idx as usize).ok_or_else(
-                                                || anyhow!("Invalid track index for muxer"),
-                                            )?;
-
-                                        muxer
-                                            .write_sample_data(
-                                                *output_idx,
-                                                samples.as_bytes(),
-                                                &output_buffer,
-                                            )
-                                            .context("Failed to write audio sample to muxer")?;
-                                    }
-                                    SampleFormat::F32(samples) => {
-                                        let output_idx =
-                                            track_indices.get(track_idx as usize).ok_or_else(
-                                                || anyhow!("Invalid track index for muxer"),
-                                            )?;
-
-                                        let bytes = unsafe {
-                                            std::slice::from_raw_parts(
-                                                samples.as_ptr() as *const u8,
-                                                samples.len() * std::mem::size_of::<f32>(),
-                                            )
-                                        };
-
-                                        muxer
-                                            .write_sample_data(*output_idx, bytes, &output_buffer)
-                                            .context("Failed to write audio sample to muxer")?;
-                                    }
-                                }
-                                frame_count += 1;
-                                if frame_count % 100 == 0 {
-                                    info!("Processed {} audio samples", frame_count);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            info!("Stopping codecs...");
-            for codec in &mut decoders {
-                let _ = codec.stop();
-                let _ = codec.release();
-            }
-
-            info!("Stopping muxer...");
-            muxer.stop().context("Failed to stop muxer")?;
-
-            info!(
-                "✅ Transcoding complete. Total frames processed: {}",
-                frame_count
-            );
-            Ok::<(), anyhow::Error>(())
         })
         .await
-        .context("tokio spawn_blocking failed")?
+        .map_err(|e| anyhow!("tokio spawn_blocking failed: {}", e))?
     }
 }
 
@@ -271,7 +124,7 @@ pub fn register_android_mediacodec_transcoder(jvm: Arc<JavaVM>) -> Result<()> {
         .set(Arc::new(transcoder))
         .map_err(|_| anyhow!("Failed to register Android MediaCodec transcoder"))?;
 
-    info!("✅ Android MediaCodec transcoder registered");
+    info!("鉁� Android MediaCodec transcoder registered");
     Ok(())
 }
 
@@ -753,7 +606,7 @@ async fn download_and_merge(
     temp_dir: &Path,
     multi_progress: &MultiProgress,
 ) -> Result<()> {
-    // 确保临时目录存在且可写
+    // 纭繚涓存椂鐩綍瀛樺湪涓斿彲鍐�
     if !temp_dir.exists() {
         std::fs::create_dir_all(temp_dir)
             .with_context(|| format!("Failed to create temp dir: {}", temp_dir.display()))?;
@@ -774,7 +627,7 @@ async fn download_and_merge(
     );
     download_pb.set_message("Downloading segments");
 
-    // 处理 AES-128 加密
+    // 澶勭悊 AES-128 鍔犲瘑
     let key: Option<(Vec<u8>, Vec<u8>)> = {
         if let Some(first_seg) = segments.first() {
             if let Some(ref key_def) = first_seg.key {
@@ -810,7 +663,7 @@ async fn download_and_merge(
     let client = Arc::new(create_http_client()?);
     let completed = Arc::new(Mutex::new(0u64));
 
-    // ✅ 关键修复：传递 temp_dir 到异步任务
+    // 鉁� 鍏抽敭淇锛氫紶閫� temp_dir 鍒板紓姝ヤ换鍔�
     let temp_dir = temp_dir.to_path_buf();
 
     let tasks = stream::iter(segments.into_iter().enumerate())
@@ -826,7 +679,7 @@ async fn download_and_merge(
             let key = key.clone();
             let pb = download_pb.clone();
             let completed = completed.clone();
-            let temp_dir = temp_dir.clone(); // ✅ 克隆到任务
+            let temp_dir = temp_dir.clone(); // 鉁� 鍏嬮殕鍒颁换鍔�
 
             tokio::spawn(async move {
                 let _permit = sem
@@ -848,7 +701,7 @@ async fn download_and_merge(
                                 data.to_vec()
                             };
 
-                            // ✅ 关键修复：分片写入 temp_dir 下
+                            // 鉁� 鍏抽敭淇锛氬垎鐗囧啓鍏� temp_dir 涓�
                             let file_name = format!("seg_{:05}.ts", idx);
                             let tmp_path = temp_dir.join(file_name);
                             fs::write(&tmp_path, &buf).await.with_context(|| {
@@ -1070,7 +923,7 @@ async fn android_hardware_transcode(
     #[cfg(target_os = "android")]
     {
         let transcoder = ANDROID_HW_TRANSCODER.get().ok_or_else(|| {
-            error!("❌ CRITICAL: Android MediaCodec transcoder not registered!");
+            error!("鉂� CRITICAL: Android MediaCodec transcoder not registered!");
             error!("   This means JNI_OnLoad was not executed by Android runtime.");
             error!("   Possible causes:");
             error!("   1. Your Rust library (.so) was not loaded as a JNI library");
@@ -1098,10 +951,10 @@ pub fn init_app() {
     {
         match init_android_transcoder_check() {
             Ok(msg) => {
-                info!("✅ {}", msg);
+                info!("鉁� {}", msg);
             }
             Err(e) => {
-                warn!("⚠️ Transcoder check result: {}", e);
+                warn!("鈿狅笍 Transcoder check result: {}", e);
             }
         }
     }
@@ -1133,17 +986,17 @@ pub extern "C" fn JNI_OnLoad(
     let jvm = match unsafe { jni::JavaVM::from_raw(vm) } {
         Ok(vm) => Arc::new(vm),
         Err(e) => {
-            eprintln!("❌ JNI_OnLoad: Failed to create JavaVM: {:?}", e);
+            eprintln!("鉂� JNI_OnLoad: Failed to create JavaVM: {:?}", e);
             return jni::sys::JNI_VERSION_1_6 as i32;
         }
     };
 
     match register_android_mediacodec_transcoder(jvm.clone()) {
         Ok(_) => {
-            info!("✅ Android MediaCodec transcoder registered successfully in JNI_OnLoad");
+            info!("鉁� Android MediaCodec transcoder registered successfully in JNI_OnLoad");
         }
         Err(e) => {
-            error!("❌ Failed to register transcoder in JNI_OnLoad: {}", e);
+            error!("鉂� Failed to register transcoder in JNI_OnLoad: {}", e);
         }
     }
 
@@ -1160,18 +1013,18 @@ pub extern "C" fn JNI_OnLoad(
                         if !app.is_null() {
                             if let Ok(global) = env.new_global_ref(app) {
                                 if let Err(e) = init_android_context(jvm.clone(), global) {
-                                    warn!("⚠️ Failed to init Android Context: {}", e);
+                                    warn!("鈿狅笍 Failed to init Android Context: {}", e);
                                 }
                             }
                         } else {
-                            info!("ℹ️ currentApplication() returned null");
+                            info!("鈩癸笍 currentApplication() returned null");
                         }
                     }
                 }
             }
         }
         Err(e) => {
-            warn!("⚠️ Failed to attach thread in JNI_OnLoad: {}", e);
+            warn!("鈿狅笍 Failed to attach thread in JNI_OnLoad: {}", e);
         }
     }
 
@@ -1195,7 +1048,7 @@ pub fn init_android_context_from_dart(jvm_ptr: i64, context_ptr: i64) -> Result<
     };
 
     init_android_context(jvm, global_context)?;
-    info!("✅ Android Context initialized from Dart");
+    info!("鉁� Android Context initialized from Dart");
     Ok(())
 }
 */
