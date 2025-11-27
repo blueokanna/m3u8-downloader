@@ -1009,27 +1009,9 @@ pub extern "C" fn JNI_OnLoad(
 
     match jvm.attach_current_thread() {
         Ok(mut env) => {
-            // Cache MediaTranscoder class from main thread (has app classloader access)
-            match env.find_class("com/bluevale/m3u8_downloader/MediaTranscoder") {
-                Ok(class) => {
-                    match env.new_global_ref(class) {
-                        Ok(global_ref) => {
-                            if MEDIA_TRANSCODER_CLASS.set(global_ref).is_ok() {
-                                info!("✅ MediaTranscoder class cached successfully");
-                            } else {
-                                warn!("⚠️ MediaTranscoder class already cached");
-                            }
-                        }
-                        Err(e) => {
-                            error!("❌ Failed to create GlobalRef for MediaTranscoder: {:?}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("❌ Failed to find MediaTranscoder class: {:?}", e);
-                    error!("   Make sure MediaTranscoder.kt is compiled and included in the APK");
-                }
-            }
+            // NOTE: We can NOT cache MediaTranscoder class here because JNI_OnLoad runs
+            // during System.loadLibrary before the app classloader has loaded the class.
+            // The class will be cached later via registerMediaTranscoderClass() called from Kotlin.
 
             if let Ok(thread_class) = env.find_class("android/app/ActivityThread") {
                 if let Ok(app_obj) = env.call_static_method(
@@ -1058,6 +1040,37 @@ pub extern "C" fn JNI_OnLoad(
     }
 
     jni::sys::JNI_VERSION_1_6 as i32
+}
+
+/// JNI function called from Kotlin to register the MediaTranscoder class.
+/// This must be called after the app classloader has loaded the class.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn Java_com_bluevale_m3u8_1downloader_MainActivity_registerMediaTranscoderClass(
+    mut env: jni::JNIEnv,
+    _class: JClass,
+) {
+    info!("registerMediaTranscoderClass called from Kotlin");
+    
+    match env.find_class("com/bluevale/m3u8_downloader/MediaTranscoder") {
+        Ok(class) => {
+            match env.new_global_ref(class) {
+                Ok(global_ref) => {
+                    if MEDIA_TRANSCODER_CLASS.set(global_ref).is_ok() {
+                        info!("✅ MediaTranscoder class cached successfully");
+                    } else {
+                        warn!("⚠️ MediaTranscoder class already cached");
+                    }
+                }
+                Err(e) => {
+                    error!("❌ Failed to create GlobalRef for MediaTranscoder: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to find MediaTranscoder class: {:?}", e);
+        }
+    }
 }
 
 /*
