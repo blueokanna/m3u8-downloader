@@ -75,12 +75,48 @@ impl AndroidMediaCodecTranscoder {
                 .attach_current_thread()
                 .map_err(|e| anyhow!("JNI attach thread failed: {}", e))?;
 
-            // Use the cached class reference (cached from main thread with app classloader)
-            let class_ref = MEDIA_TRANSCODER_CLASS
-                .get()
-                .ok_or_else(|| anyhow!("MediaTranscoder class not cached. JNI_OnLoad may have failed."))?;
-            // SAFETY: GlobalRef was created from a JClass, so it's safe to cast back
-            let class: JClass = unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) };
+            // Try to get cached class first, otherwise load it using app ClassLoader
+            let class: JClass = if let Some(class_ref) = MEDIA_TRANSCODER_CLASS.get() {
+                // SAFETY: GlobalRef was created from a JClass, so it's safe to cast back
+                unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) }
+            } else {
+                // Load class using app context's ClassLoader (works from any thread)
+                let ctx = get_android_context()
+                    .map_err(|e| anyhow!("Failed to get Android context: {}", e))?;
+                
+                // Get ClassLoader from app context
+                let class_loader = env
+                    .call_method(ctx.app_context.as_obj(), "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+                    .map_err(|e| anyhow!("Failed to get ClassLoader: {:?}", e))?
+                    .l()
+                    .map_err(|e| anyhow!("ClassLoader is not an object: {:?}", e))?;
+                
+                // Use ClassLoader.loadClass() to load MediaTranscoder
+                let class_name = env
+                    .new_string("com.bluevale.m3u8_downloader.MediaTranscoder")
+                    .map_err(|e| anyhow!("Failed to create class name string: {:?}", e))?;
+                
+                let loaded_class = env
+                    .call_method(
+                        &class_loader,
+                        "loadClass",
+                        "(Ljava/lang/String;)Ljava/lang/Class;",
+                        &[JValue::Object(&class_name)],
+                    )
+                    .map_err(|e| anyhow!("Failed to load MediaTranscoder class: {:?}", e))?
+                    .l()
+                    .map_err(|e| anyhow!("loadClass did not return a Class: {:?}", e))?;
+                
+                info!("✅ MediaTranscoder class loaded via ClassLoader");
+                
+                // Cache the class for future use
+                if let Ok(global_ref) = env.new_global_ref(&loaded_class) {
+                    let _ = MEDIA_TRANSCODER_CLASS.set(global_ref);
+                }
+                
+                // SAFETY: loaded_class is a java.lang.Class object
+                unsafe { JClass::from_raw(loaded_class.as_raw()) }
+            };
 
             let input_ts_jstring = env
                 .new_string(&input_ts)
@@ -1040,37 +1076,6 @@ pub extern "C" fn JNI_OnLoad(
     }
 
     jni::sys::JNI_VERSION_1_6 as i32
-}
-
-/// JNI function called from Kotlin to register the MediaTranscoder class.
-/// This must be called after the app classloader has loaded the class.
-#[cfg(target_os = "android")]
-#[no_mangle]
-pub extern "C" fn Java_com_bluevale_m3u8_1downloader_MainActivity_registerMediaTranscoderClass(
-    mut env: jni::JNIEnv,
-    _class: JClass,
-) {
-    info!("registerMediaTranscoderClass called from Kotlin");
-    
-    match env.find_class("com/bluevale/m3u8_downloader/MediaTranscoder") {
-        Ok(class) => {
-            match env.new_global_ref(class) {
-                Ok(global_ref) => {
-                    if MEDIA_TRANSCODER_CLASS.set(global_ref).is_ok() {
-                        info!("✅ MediaTranscoder class cached successfully");
-                    } else {
-                        warn!("⚠️ MediaTranscoder class already cached");
-                    }
-                }
-                Err(e) => {
-                    error!("❌ Failed to create GlobalRef for MediaTranscoder: {:?}", e);
-                }
-            }
-        }
-        Err(e) => {
-            error!("❌ Failed to find MediaTranscoder class: {:?}", e);
-        }
-    }
 }
 
 /*
