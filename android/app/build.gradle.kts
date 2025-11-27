@@ -18,6 +18,12 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    sourceSets {
+        getByName("main") {
+            java.srcDirs("src/main/kotlin", "src/main/java")
+        }
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.bluevale.m3u8_downloader"
