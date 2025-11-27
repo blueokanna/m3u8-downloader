@@ -19,7 +19,7 @@ use tokio::{fs, process::Command, sync::Mutex};
 use url::Url;
 
 #[cfg(target_os = "android")]
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JClass, JObject, JValue};
 #[cfg(target_os = "android")]
 use jni::JavaVM;
 
@@ -43,6 +43,10 @@ static ANDROID_HW_TRANSCODER: OnceLock<Arc<AndroidMediaCodecTranscoder>> = OnceL
 
 #[cfg(target_os = "android")]
 static ANDROID_CONTEXT: OnceLock<AndroidContextData> = OnceLock::new();
+
+/// Cached MediaTranscoder class reference (must be cached from main thread with app classloader)
+#[cfg(target_os = "android")]
+static MEDIA_TRANSCODER_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
 #[cfg(target_os = "android")]
 pub struct AndroidMediaCodecTranscoder {
@@ -71,9 +75,12 @@ impl AndroidMediaCodecTranscoder {
                 .attach_current_thread()
                 .map_err(|e| anyhow!("JNI attach thread failed: {}", e))?;
 
-            let class = env
-                .find_class("com/bluevale/m3u8_downloader/MediaTranscoder")
-                .map_err(|e| anyhow!("Failed to find Java class: {}", e))?;
+            // Use the cached class reference (cached from main thread with app classloader)
+            let class_ref = MEDIA_TRANSCODER_CLASS
+                .get()
+                .ok_or_else(|| anyhow!("MediaTranscoder class not cached. JNI_OnLoad may have failed."))?;
+            // SAFETY: GlobalRef was created from a JClass, so it's safe to cast back
+            let class: JClass = unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) };
 
             let input_ts_jstring = env
                 .new_string(&input_ts)
@@ -1002,6 +1009,28 @@ pub extern "C" fn JNI_OnLoad(
 
     match jvm.attach_current_thread() {
         Ok(mut env) => {
+            // Cache MediaTranscoder class from main thread (has app classloader access)
+            match env.find_class("com/bluevale/m3u8_downloader/MediaTranscoder") {
+                Ok(class) => {
+                    match env.new_global_ref(class) {
+                        Ok(global_ref) => {
+                            if MEDIA_TRANSCODER_CLASS.set(global_ref).is_ok() {
+                                info!("✅ MediaTranscoder class cached successfully");
+                            } else {
+                                warn!("⚠️ MediaTranscoder class already cached");
+                            }
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to create GlobalRef for MediaTranscoder: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("❌ Failed to find MediaTranscoder class: {:?}", e);
+                    error!("   Make sure MediaTranscoder.kt is compiled and included in the APK");
+                }
+            }
+
             if let Ok(thread_class) = env.find_class("android/app/ActivityThread") {
                 if let Ok(app_obj) = env.call_static_method(
                     thread_class,
@@ -1013,18 +1042,18 @@ pub extern "C" fn JNI_OnLoad(
                         if !app.is_null() {
                             if let Ok(global) = env.new_global_ref(app) {
                                 if let Err(e) = init_android_context(jvm.clone(), global) {
-                                    warn!("鈿狅笍 Failed to init Android Context: {}", e);
+                                    warn!("⚠️ Failed to init Android Context: {}", e);
                                 }
                             }
                         } else {
-                            info!("鈩癸笍 currentApplication() returned null");
+                            info!("ℹ️ currentApplication() returned null");
                         }
                     }
                 }
             }
         }
         Err(e) => {
-            warn!("鈿狅笍 Failed to attach thread in JNI_OnLoad: {}", e);
+            warn!("⚠️ Failed to attach thread in JNI_OnLoad: {}", e);
         }
     }
 
