@@ -4,14 +4,6 @@ import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
-/**
- * MainActivity - Android 入口点
- * 
- * 关键职责：
- * 1. 加载 Rust 本地库 (.so 文件)
- * 2. 初始化 Flutter 引擎
- * 3. 确保 MediaTranscoder 在转码线程中可被找到
- */
 class MainActivity : FlutterActivity() {
     
     companion object {

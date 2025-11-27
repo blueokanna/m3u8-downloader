@@ -19,7 +19,7 @@ use tokio::{fs, process::Command, sync::Mutex};
 use url::Url;
 
 #[cfg(target_os = "android")]
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JClass, JObject, JValue};
 #[cfg(target_os = "android")]
 use jni::JavaVM;
 
@@ -43,6 +43,10 @@ static ANDROID_HW_TRANSCODER: OnceLock<Arc<AndroidMediaCodecTranscoder>> = OnceL
 
 #[cfg(target_os = "android")]
 static ANDROID_CONTEXT: OnceLock<AndroidContextData> = OnceLock::new();
+
+/// Cached MediaTranscoder class reference (must be cached from main thread with app classloader)
+#[cfg(target_os = "android")]
+static MEDIA_TRANSCODER_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
 #[cfg(target_os = "android")]
 pub struct AndroidMediaCodecTranscoder {
@@ -71,9 +75,48 @@ impl AndroidMediaCodecTranscoder {
                 .attach_current_thread()
                 .map_err(|e| anyhow!("JNI attach thread failed: {}", e))?;
 
-            let class = env
-                .find_class("com/bluevale/m3u8_downloader/MediaTranscoder")
-                .map_err(|e| anyhow!("Failed to find Java class: {}", e))?;
+            // Try to get cached class first, otherwise load it using app ClassLoader
+            let class: JClass = if let Some(class_ref) = MEDIA_TRANSCODER_CLASS.get() {
+                // SAFETY: GlobalRef was created from a JClass, so it's safe to cast back
+                unsafe { JClass::from_raw(class_ref.as_obj().as_raw()) }
+            } else {
+                // Load class using app context's ClassLoader (works from any thread)
+                let ctx = get_android_context()
+                    .map_err(|e| anyhow!("Failed to get Android context: {}", e))?;
+                
+                // Get ClassLoader from app context
+                let class_loader = env
+                    .call_method(ctx.app_context.as_obj(), "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+                    .map_err(|e| anyhow!("Failed to get ClassLoader: {:?}", e))?
+                    .l()
+                    .map_err(|e| anyhow!("ClassLoader is not an object: {:?}", e))?;
+                
+                // Use ClassLoader.loadClass() to load MediaTranscoder
+                let class_name = env
+                    .new_string("com.bluevale.m3u8_downloader.MediaTranscoder")
+                    .map_err(|e| anyhow!("Failed to create class name string: {:?}", e))?;
+                
+                let loaded_class = env
+                    .call_method(
+                        &class_loader,
+                        "loadClass",
+                        "(Ljava/lang/String;)Ljava/lang/Class;",
+                        &[JValue::Object(&class_name)],
+                    )
+                    .map_err(|e| anyhow!("Failed to load MediaTranscoder class: {:?}", e))?
+                    .l()
+                    .map_err(|e| anyhow!("loadClass did not return a Class: {:?}", e))?;
+                
+                info!("✅ MediaTranscoder class loaded via ClassLoader");
+                
+                // Cache the class for future use
+                if let Ok(global_ref) = env.new_global_ref(&loaded_class) {
+                    let _ = MEDIA_TRANSCODER_CLASS.set(global_ref);
+                }
+                
+                // SAFETY: loaded_class is a java.lang.Class object
+                unsafe { JClass::from_raw(loaded_class.as_raw()) }
+            };
 
             let input_ts_jstring = env
                 .new_string(&input_ts)
@@ -1002,6 +1045,10 @@ pub extern "C" fn JNI_OnLoad(
 
     match jvm.attach_current_thread() {
         Ok(mut env) => {
+            // NOTE: We can NOT cache MediaTranscoder class here because JNI_OnLoad runs
+            // during System.loadLibrary before the app classloader has loaded the class.
+            // The class will be cached later via registerMediaTranscoderClass() called from Kotlin.
+
             if let Ok(thread_class) = env.find_class("android/app/ActivityThread") {
                 if let Ok(app_obj) = env.call_static_method(
                     thread_class,
@@ -1013,18 +1060,18 @@ pub extern "C" fn JNI_OnLoad(
                         if !app.is_null() {
                             if let Ok(global) = env.new_global_ref(app) {
                                 if let Err(e) = init_android_context(jvm.clone(), global) {
-                                    warn!("鈿狅笍 Failed to init Android Context: {}", e);
+                                    warn!("⚠️ Failed to init Android Context: {}", e);
                                 }
                             }
                         } else {
-                            info!("鈩癸笍 currentApplication() returned null");
+                            info!("ℹ️ currentApplication() returned null");
                         }
                     }
                 }
             }
         }
         Err(e) => {
-            warn!("鈿狅笍 Failed to attach thread in JNI_OnLoad: {}", e);
+            warn!("⚠️ Failed to attach thread in JNI_OnLoad: {}", e);
         }
     }
 

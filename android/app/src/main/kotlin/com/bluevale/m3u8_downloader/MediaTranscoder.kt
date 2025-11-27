@@ -43,13 +43,11 @@ object MediaTranscoder {
                 return false
             }
 
-            // 第一步：尝试快速转封装（如果可能）
             if (tryRemuxIfPossible(inputPath, outputPath, vBitrate, aBitrate)) {
                 Log.i(TAG, "Remux succeeded")
                 return true
             }
 
-            // 第二步：使用 MediaCodec 进行转码
             Log.i(TAG, "Attempting MediaCodec transcode")
             return transcodeTsToMp4(inputPath, outputPath, vBitrate, aBitrate)
 
