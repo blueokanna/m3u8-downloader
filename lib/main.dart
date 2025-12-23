@@ -76,7 +76,7 @@ class _MyAppState extends State<MyApp> {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'M3U8 Video Downloader',
+      title: 'FerrisLoad',
       themeMode: _themeMode,
       theme: ThemeData(
         useMaterial3: true,
@@ -375,7 +375,7 @@ class _DownloadPageState extends State<DownloadPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('M3U8 Video Downloader'),
+        title: const Text('FerrisLoad'),
         centerTitle: true,
         actions: [
           IconButton(

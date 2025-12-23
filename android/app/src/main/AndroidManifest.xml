@@ -24,7 +24,7 @@
         android:required="false" />
 
     <application
-        android:label="M3U8 Downloader"
+        android:label="FerrisLoad"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

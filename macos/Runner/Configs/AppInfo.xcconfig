@@ -5,10 +5,10 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = m3u8_downloader
+PRODUCT_NAME = FerrisLoad
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.m3u8Downloader
+PRODUCT_BUNDLE_IDENTIFIER = com.blue.ferrisload
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2025 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2025 com.blue. All rights reserved.
