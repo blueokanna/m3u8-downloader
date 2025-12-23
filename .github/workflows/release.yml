@@ -47,6 +47,7 @@ jobs:
         run: flutter_rust_bridge_codegen generate
 
       - name: Rust Builder Files
+        working-directory: ./rust
         run: cargo build --release
 
       - name: Build APK
@@ -88,6 +89,7 @@ jobs:
         run: flutter_rust_bridge_codegen generate
       
       - name: Rust Builder Files
+        working-directory: ./rust
         run: cargo build --release
 
       - name: Build Windows
@@ -128,7 +130,8 @@ jobs:
 
       - name: Generate Rust Bridge Code
         run: flutter_rust_bridge_codegen generate
-      - name: Rust Builder Files
+      - working-directory: ./rust
+        name: Rust Builder Files
         run: cargo build --release
 
       - name: Build Linux
