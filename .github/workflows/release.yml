@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*' # 当推送 v1.0.0, v2.0.1 等标签时触发
+      - 'v*'
 
 permissions:
   contents: write
@@ -21,16 +21,16 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android    
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.27.1' # 使用较新的稳定版
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
+          flutter-version: '3.27.1'
 
       - name: Install Android NDK
         run: |
@@ -45,6 +45,9 @@ jobs:
 
       - name: Generate Rust Bridge Code
         run: flutter_rust_bridge_codegen generate
+
+      - name: Generate Rust Builder Files
+        run: cargo build --release
 
       - name: Build APK
         run: flutter build apk --release
