@@ -41,7 +41,7 @@ jobs:
         run: flutter pub get
 
       - name: Install Codegen
-        run: cargo install flutter_rust_bridge_codegen --version 2.11.1 --features uuid,chrono
+        run: cargo install flutter_rust_bridge_codegen --version 2.11.1
 
       - name: Generate Rust Bridge Code
         run: flutter_rust_bridge_codegen generate
@@ -79,7 +79,7 @@ jobs:
         run: flutter pub get
 
       - name: Install Codegen
-        run: cargo install flutter_rust_bridge_codegen --version 2.11.1 --features uuid,chrono
+        run: cargo install flutter_rust_bridge_codegen --version 2.11.1
 
       - name: Generate Rust Bridge Code
         run: flutter_rust_bridge_codegen generate
@@ -118,13 +118,10 @@ jobs:
         run: flutter pub get
 
       - name: Install Codegen
-        run: cargo install flutter_rust_bridge_codegen --version 2.11.1 --features uuid,chrono
+        run: cargo install flutter_rust_bridge_codegen --version 2.11.1
 
       - name: Generate Rust Bridge Code
-        run: flutter_rust_bridge_codegen generater_rust_bridge:codegen generate
-
-      - name: Install Dependencies
-        run: flutter pub get
+        run: flutter_rust_bridge_codegen generate
 
       - name: Build Linux
         run: flutter build linux --release
