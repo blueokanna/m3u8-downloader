@@ -40,8 +40,11 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
+      - name: Install Codegen
+        run: cargo install flutter_rust_bridge_codegen --version 2.11.1 --features uuid,chrono
+
       - name: Generate Rust Bridge Code
-        run: dart run flutter_rust_bridge:codegen generate
+        run: flutter_rust_bridge_codegen generate
 
       - name: Build APK
         run: flutter build apk --release
@@ -72,11 +75,14 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Generate Rust Bridge Code
-        run: dart run flutter_rust_bridge:codegen generate
-
       - name: Install Dependencies
         run: flutter pub get
+
+      - name: Install Codegen
+        run: cargo install flutter_rust_bridge_codegen --version 2.11.1 --features uuid,chrono
+
+      - name: Generate Rust Bridge Code
+        run: flutter_rust_bridge_codegen generate
 
       - name: Build Windows
         run: flutter build windows --release
@@ -108,11 +114,14 @@ jobs:
           channel: 'stable'
           flutter-version: '3.27.1'
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Install Codegen
+        run: cargo install flutter_rust_bridge_codegen --version 2.11.1 --features uuid,chrono
 
       - name: Generate Rust Bridge Code
-        run: dart run flutter_rust_bridge:codegen generate
+        run: flutter_rust_bridge_codegen generater_rust_bridge:codegen generate
 
       - name: Install Dependencies
         run: flutter pub get
