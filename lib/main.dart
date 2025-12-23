@@ -9,11 +9,18 @@ import 'package:permission_handler/permission_handler.dart';
 
 Future<void> requestStoragePermissions() async {
   if (Platform.isAndroid) {
-    final status = await Permission.storage.request();
-    if (status.isDenied) {
-      debugPrint('Storage permission denied');
-    } else if (status.isGranted) {
+    // Request multiple permissions for better compatibility
+    Map<Permission, PermissionStatus> statuses = await [
+      Permission.storage,
+      Permission.manageExternalStorage,
+    ].request();
+
+    if (statuses[Permission.manageExternalStorage]?.isGranted == true) {
+      debugPrint('Manage External Storage permission granted');
+    } else if (statuses[Permission.storage]?.isGranted == true) {
       debugPrint('Storage permission granted');
+    } else {
+      debugPrint('Storage permissions denied');
     }
   }
 }
@@ -133,6 +140,7 @@ class _DownloadPageState extends State<DownloadPage> {
 
   bool _keepTemp = false;
   bool _isRunning = false;
+  double _progress = 0.0;
 
   String? _outputDirectory;
   String? _statusMessage;
@@ -197,10 +205,11 @@ class _DownloadPageState extends State<DownloadPage> {
       _isRunning = true;
       _statusMessage = 'Checking environment and starting download...';
       _errorMessage = null;
+      _progress = 0.0;
     });
 
     try {
-      await hls2Mp4Run(
+      final stream = hls2Mp4Run(
         url: url,
         concurrency: concurrency,
         output: output,
@@ -210,11 +219,20 @@ class _DownloadPageState extends State<DownloadPage> {
         keepTemp: _keepTemp,
       );
 
+      await for (final event in stream) {
+        if (!mounted) break;
+        setState(() {
+          _statusMessage = event.message;
+          _progress = event.progress;
+        });
+      }
+
       if (!mounted) return;
 
       setState(() {
         _statusMessage = '✅ 任务完成：$output';
         _errorMessage = null;
+        _progress = 1.0;
       });
 
       messenger.showSnackBar(
@@ -236,10 +254,11 @@ class _DownloadPageState extends State<DownloadPage> {
         SnackBar(content: Text('任务失败：$e'), behavior: SnackBarBehavior.floating),
       );
     } finally {
-      if (!mounted) return;
-      setState(() {
-        _isRunning = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isRunning = false;
+        });
+      }
     }
   }
 
@@ -594,7 +613,11 @@ class _DownloadPageState extends State<DownloadPage> {
                     const SizedBox(height: 16),
 
                     // 执行按钮 + 顶部线性进度
-                    if (_isRunning) const LinearProgressIndicator(minHeight: 3),
+                    if (_isRunning)
+                      LinearProgressIndicator(
+                        value: _progress > 0 ? _progress : null,
+                        minHeight: 4,
+                      ),
                     const SizedBox(height: 8),
                     FilledButton.icon(
                       icon: _isRunning
@@ -675,9 +698,8 @@ class _DownloadPageState extends State<DownloadPage> {
                           Text(
                             _platformHint(),
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: isDark
-                                  ? Colors.grey[400]
-                                  : Colors.grey[700],
+                              color:
+                                  isDark ? Colors.grey[400] : Colors.grey[700],
                             ),
                           ),
                         ],

@@ -33,6 +33,12 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        ndk {
+            // Filter ABIs to match installed Rust targets
+            // Exclude x86_64 since the target is missing
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86")
+        }
     }
 
     buildTypes {

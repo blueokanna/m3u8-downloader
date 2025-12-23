@@ -7,6 +7,7 @@
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
@@ -23,7 +24,7 @@
         android:required="false" />
 
     <application
-        android:label="m3u8_downloader"
+        android:label="M3U8 Downloader"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

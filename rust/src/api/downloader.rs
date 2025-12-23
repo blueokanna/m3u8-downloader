@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![warn(unused_imports, unused_variables)]
+#![allow(unused_imports, unused_variables)]
 
 use aes::Aes128;
 use anyhow::{anyhow, bail, Context, Result};
@@ -11,12 +11,16 @@ use log::{error, info, warn};
 use m3u8_rs::{parse_playlist, Playlist};
 use reqwest::{header, Client};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+#[cfg(target_os = "android")]
+use std::sync::OnceLock;
 use std::time::Duration;
-use std::{env, fs::File, io::Write};
+#[cfg(target_os = "android")]
+use std::env;
 use tokio::sync::Semaphore;
 use tokio::{fs, process::Command, sync::Mutex};
 use url::Url;
+use crate::frb_generated::StreamSink;
 
 #[cfg(target_os = "android")]
 use jni::objects::{GlobalRef, JClass, JObject, JValue};
@@ -36,6 +40,12 @@ enum AccelType {
 enum TranscoderKind {
     Ffmpeg(AccelType),
     AndroidHardware,
+}
+
+#[derive(Clone)]
+pub struct ProgressUpdate {
+    pub message: String,
+    pub progress: f64,
 }
 
 #[cfg(target_os = "android")]
@@ -404,6 +414,7 @@ fn select_writable_temp_dir() -> Result<PathBuf> {
 
 #[flutter_rust_bridge::frb()]
 pub async fn hls2mp4_run(
+    sink: StreamSink<ProgressUpdate>,
     url: String,
     concurrency: i32,
     output: String,
@@ -412,6 +423,11 @@ pub async fn hls2mp4_run(
     audio_bitrate: i32,
     keep_temp: bool,
 ) -> Result<()> {
+    let _ = sink.add(ProgressUpdate {
+        message: "Initializing...".to_string(),
+        progress: 0.0,
+    });
+
     #[cfg(target_os = "android")]
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
@@ -437,6 +453,11 @@ pub async fn hls2mp4_run(
     check_pb.set_message("Selecting transcoder backend...");
     check_pb.enable_steady_tick(Duration::from_millis(100));
 
+    let _ = sink.add(ProgressUpdate {
+        message: "Selecting transcoder backend...".to_string(),
+        progress: 0.01,
+    });
+
     let backend = select_transcoder_backend().await?;
     match backend {
         TranscoderKind::Ffmpeg(accel) => {
@@ -455,6 +476,11 @@ pub async fn hls2mp4_run(
     );
     download_pb.set_message("Downloading M3U8 playlist...");
     download_pb.enable_steady_tick(Duration::from_millis(100));
+
+    let _ = sink.add(ProgressUpdate {
+        message: "Downloading M3U8 playlist...".to_string(),
+        progress: 0.02,
+    });
 
     let m3u8_content = download_playlist(&url).await?;
     let (_, playlist) =
@@ -539,6 +565,7 @@ pub async fn hls2mp4_run(
                     &temp_ts_str,
                     &temp_dir,
                     &multi_progress,
+                    sink.clone(),
                 )
                 .await?;
             } else {
@@ -555,6 +582,7 @@ pub async fn hls2mp4_run(
                 &temp_ts_str,
                 &temp_dir,
                 &multi_progress,
+                sink.clone(),
             )
             .await?;
         }
@@ -567,12 +595,18 @@ pub async fn hls2mp4_run(
         audio_bitrate,
         &multi_progress,
         backend,
+        sink.clone(),
     )
     .await?;
 
     if !keep_temp {
         let _ = fs::remove_file(&temp_ts_str).await;
     }
+
+    let _ = sink.add(ProgressUpdate {
+        message: "All tasks completed".to_string(),
+        progress: 1.0,
+    });
 
     Ok(())
 }
@@ -648,6 +682,7 @@ async fn download_and_merge(
     output_file: &str,
     temp_dir: &Path,
     multi_progress: &MultiProgress,
+    sink: StreamSink<ProgressUpdate>,
 ) -> Result<()> {
     // 纭繚涓存椂鐩綍瀛樺湪涓斿彲鍐�
     if !temp_dir.exists() {
@@ -722,6 +757,7 @@ async fn download_and_merge(
             let key = key.clone();
             let pb = download_pb.clone();
             let completed = completed.clone();
+            let sink = sink.clone();
             let temp_dir = temp_dir.clone(); // 鉁� 鍏嬮殕鍒颁换鍔�
 
             tokio::spawn(async move {
@@ -759,6 +795,10 @@ async fn download_and_merge(
                             *count += 1;
                             pb.set_position(*count);
                             pb.set_message(format!("Downloading segments [{}/{}]", *count, total));
+                            let _ = sink.add(ProgressUpdate {
+                                message: format!("Downloading segments [{}/{}]", *count, total),
+                                progress: (*count as f64) / (total as f64) * 0.9,
+                            });
 
                             return Ok::<(), anyhow::Error>(());
                         }
@@ -806,18 +846,20 @@ async fn download_and_merge(
     );
     merge_pb.set_message("Merging segments");
 
-    let mut output = File::create(output_file)
+    let mut output = fs::File::create(output_file)
+        .await
         .with_context(|| format!("Failed to create output TS file: {}", output_file))?;
 
     for i in 0..total {
         let file_name = format!("seg_{:05}.ts", i);
         let tmp_path = temp_dir.join(&file_name);
 
-        let chunk = fs::read(&tmp_path)
+        let mut segment = fs::File::open(&tmp_path)
             .await
             .with_context(|| format!("Failed to read segment: {}", tmp_path.display()))?;
-        output
-            .write_all(&chunk)
+        
+        tokio::io::copy(&mut segment, &mut output)
+            .await
             .with_context(|| format!("Failed to write to output TS: {}", output_file))?;
 
         let _ = fs::remove_file(&tmp_path).await;
@@ -869,6 +911,7 @@ async fn convert_to_mp4(
     audio_bitrate: u32,
     multi_progress: &MultiProgress,
     backend: TranscoderKind,
+    sink: StreamSink<ProgressUpdate>,
 ) -> Result<()> {
     let convert_pb = multi_progress.add(ProgressBar::new_spinner());
     convert_pb.set_style(
@@ -878,49 +921,76 @@ async fn convert_to_mp4(
     convert_pb.set_message("Converting to MP4...");
     convert_pb.enable_steady_tick(Duration::from_millis(120));
 
+    let _ = sink.add(ProgressUpdate {
+        message: "Converting to MP4...".to_string(),
+        progress: 0.95,
+    });
+
     match backend {
         TranscoderKind::Ffmpeg(accel) => {
             info!("Using FFmpeg backend: {:?}", accel);
-            let mut ffmpeg_args = vec!["-hide_banner", "-loglevel", "info"];
+            let mut ffmpeg_args: Vec<String> = vec![
+                "-hide_banner".to_string(),
+                "-loglevel".to_string(),
+                "info".to_string(),
+            ];
 
-            match accel {
-                AccelType::Nvidia => {
-                    info!("Detected NVIDIA GPU, using NVENC");
-                    ffmpeg_args.extend(&["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]);
-                    ffmpeg_args.extend(&["-c:v", "h264_cuvid"]);
-                    ffmpeg_args.extend(&["-i", input_ts]);
-                    ffmpeg_args.extend(&["-c:a", "aac", "-b:a", "320k"]);
-                    ffmpeg_args.extend(&["-c:v", "h264_nvenc", "-preset", "p3", "-rc", "vbr"]);
-                }
-                AccelType::AMD => {
-                    info!("Detected AMD GPU, using AMF");
-                    ffmpeg_args.extend(&["-i", input_ts]);
-                    ffmpeg_args.extend(&["-c:a", "aac", "-b:a", "320k"]);
-                    ffmpeg_args.extend(&["-c:v", "h264_amf", "-rc", "vbr"]);
-                }
-                AccelType::CPU => {
-                    info!("No supported GPU found, using CPU (libx264)");
-                    ffmpeg_args.extend(&["-i", input_ts]);
-                    ffmpeg_args.extend(&["-c:a", "aac"]);
-                    ffmpeg_args.extend(&["-c:v", "libx264", "-preset", "medium"]);
-                }
-            }
-
-            let video_bitrate_str;
-            if video_bitrate > 0 {
-                video_bitrate_str = format!("{}k", video_bitrate);
-                ffmpeg_args.extend_from_slice(&["-b:v", &video_bitrate_str]);
-            }
-
-            let audio_bitrate_str;
-            if audio_bitrate > 0 {
-                audio_bitrate_str = format!("{}k", audio_bitrate);
-                ffmpeg_args.extend_from_slice(&["-b:a", &audio_bitrate_str]);
+            if video_bitrate == 0 && audio_bitrate == 0 {
+                info!("Bitrates are 0, attempting to remux (copy streams) for high efficiency");
+                ffmpeg_args.extend([
+                    "-i".to_string(),
+                    input_ts.to_string(),
+                    "-c".to_string(),
+                    "copy".to_string(),
+                    "-bsf:a".to_string(),
+                    "aac_adtstoasc".to_string(),
+                ]);
             } else {
-                ffmpeg_args.extend_from_slice(&["-b:a", "256k"]);
+                match accel {
+                    AccelType::Nvidia => {
+                        info!("Detected NVIDIA GPU, using NVENC");
+                        ffmpeg_args.extend([
+                            "-hwaccel".to_string(), "cuda".to_string(),
+                            "-hwaccel_output_format".to_string(), "cuda".to_string(),
+                            "-c:v".to_string(), "h264_cuvid".to_string(),
+                            "-i".to_string(), input_ts.to_string(),
+                            "-c:a".to_string(), "aac".to_string(), "-b:a".to_string(), "320k".to_string(),
+                            "-c:v".to_string(), "h264_nvenc".to_string(), "-preset".to_string(), "p3".to_string(), "-rc".to_string(), "vbr".to_string(),
+                        ]);
+                    }
+                    AccelType::AMD => {
+                        info!("Detected AMD GPU, using AMF");
+                        ffmpeg_args.extend([
+                            "-i".to_string(), input_ts.to_string(),
+                            "-c:a".to_string(), "aac".to_string(), "-b:a".to_string(), "320k".to_string(),
+                            "-c:v".to_string(), "h264_amf".to_string(), "-rc".to_string(), "vbr".to_string(),
+                        ]);
+                    }
+                    AccelType::CPU => {
+                        info!("No supported GPU found, using CPU (libx264)");
+                        ffmpeg_args.extend([
+                            "-i".to_string(), input_ts.to_string(),
+                            "-c:a".to_string(), "aac".to_string(),
+                            "-c:v".to_string(), "libx264".to_string(), "-preset".to_string(), "medium".to_string(),
+                        ]);
+                    }
+                }
+
+                if video_bitrate > 0 {
+                    ffmpeg_args.push("-b:v".to_string());
+                    ffmpeg_args.push(format!("{}k", video_bitrate));
+                }
+
+                if audio_bitrate > 0 {
+                    ffmpeg_args.push("-b:a".to_string());
+                    ffmpeg_args.push(format!("{}k", audio_bitrate));
+                } else {
+                    ffmpeg_args.push("-b:a".to_string());
+                    ffmpeg_args.push("256k".to_string());
+                }
             }
 
-            ffmpeg_args.push(output_path);
+            ffmpeg_args.push(output_path.to_string());
 
             let output = Command::new("ffmpeg")
                 .args(&ffmpeg_args)
@@ -982,6 +1052,10 @@ async fn android_hardware_transcode(
 
     #[cfg(not(target_os = "android"))]
     {
+        let _ = input_ts;
+        let _ = output_mp4;
+        let _ = video_bitrate;
+        let _ = audio_bitrate;
         bail!("Android hardware transcoding is only available on Android");
     }
 }

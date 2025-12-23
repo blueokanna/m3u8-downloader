@@ -161,6 +161,7 @@ object MediaTranscoder {
             // 复制样本数据
             val buffer = ByteBuffer.allocateDirect(1024 * 1024) // 1MB 缓冲区
             val info = MediaCodec.BufferInfo()
+            var firstPts: Long = -1
             
             while (true) {
                 val sampleSize = extractor.readSampleData(buffer, 0)
@@ -169,6 +170,17 @@ object MediaTranscoder {
                 info.offset = 0
                 info.size = sampleSize
                 info.presentationTimeUs = extractor.sampleTime
+                
+                if (firstPts < 0) {
+                    firstPts = info.presentationTimeUs
+                }
+                if (firstPts > 0) {
+                    info.presentationTimeUs -= firstPts
+                }
+                if (info.presentationTimeUs < 0) {
+                    info.presentationTimeUs = 0
+                }
+
                 info.flags = extractor.sampleFlags
                 
                 val trackIdx = extractor.sampleTrackIndex
