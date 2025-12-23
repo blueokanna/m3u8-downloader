@@ -30,7 +30,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
 
       - name: Install Android NDK
         run: |
@@ -39,6 +39,9 @@ jobs:
 
       - name: Install Dependencies
         run: flutter pub get
+
+      - name: Generate Rust Bridge Code
+        run: dart run flutter_rust_bridge:codegen generate
 
       - name: Build APK
         run: flutter build apk --release
@@ -68,6 +71,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      - name: Generate Rust Bridge Code
+        run: dart run flutter_rust_bridge:codegen generate
 
       - name: Install Dependencies
         run: flutter pub get
@@ -104,6 +110,9 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate Rust Bridge Code
+        run: dart run flutter_rust_bridge:codegen generate
 
       - name: Install Dependencies
         run: flutter pub get
