@@ -46,7 +46,7 @@ jobs:
           flutter doctor
 
       - name: Install Dependencies
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Generate Launcher Icons
         run: flutter pub run flutter_launcher_icons
@@ -100,7 +100,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install Dependencies
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Install Codegen
         run: cargo install flutter_rust_bridge_codegen --version 2.11.1
@@ -139,7 +139,7 @@ jobs:
           flutter-version: '3.27.1'
 
       - name: Install Dependencies
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get
 
       - name: Install Codegen
         run: cargo install flutter_rust_bridge_codegen --version 2.11.1
