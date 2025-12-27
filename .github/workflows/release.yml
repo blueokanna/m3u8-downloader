@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,6 +21,13 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27
+          add-to-path: true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,7 +46,10 @@ jobs:
           flutter doctor
 
       - name: Install Dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
+
+      - name: Generate Launcher Icons
+        run: flutter pub run flutter_launcher_icons
 
       - name: Install Codegen
         run: cargo install flutter_rust_bridge_codegen --version 2.11.1
@@ -51,8 +62,13 @@ jobs:
 
       - name: Build Rust for Android
         working-directory: ./rust
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cargo ndk -t armeabi-v7a -t arm64-v8a -t x86 -t x86_64 -o ../android/app/src/main/jniLibs build --release
+
+      - name: Verify JNI Libs
+        run: ls -R android/app/src/main/jniLibs
 
       - name: Build APK
         run: flutter build apk --release
@@ -84,7 +100,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install Dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Install Codegen
         run: cargo install flutter_rust_bridge_codegen --version 2.11.1
@@ -123,7 +139,7 @@ jobs:
           flutter-version: '3.27.1'
 
       - name: Install Dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Install Codegen
         run: cargo install flutter_rust_bridge_codegen --version 2.11.1

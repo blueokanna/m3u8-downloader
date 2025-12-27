@@ -37,7 +37,7 @@ dependencies:
   rust_lib_m3u8_downloader:
     path: rust_builder
   flutter_rust_bridge: 2.11.1
-  file_picker: ^10.3.7
+  file_picker: ^10.3.8
   permission_handler: ^12.0.1
 
 dev_dependencies:
@@ -45,13 +45,16 @@ dev_dependencies:
     sdk: flutter
   flutter_test:
     sdk: flutter
-  flutter_launcher_icons: ^0.13.1
+  flutter_launcher_icons: ^0.14.4
+  flutter_lints: ^5.0.0
 
 flutter_launcher_icons:
   android: "ic_launcher"
   ios: true
   image_path: "assets/ferrisload.png"
   min_sdk_android: 21 # android min sdk min:16, default 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/ferrisload.png"
   web:
     generate: true
     image_path: "assets/ferrisload.png"
@@ -64,13 +67,6 @@ flutter_launcher_icons:
   macos:
     generate: true
     image_path: "assets/ferrisload.png"
-
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^6.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
